@@ -111,8 +111,6 @@ Resources:
         - - 'fleet/'
           - !Ref AppStreamFleet1
       RoleARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/service-role/ApplicationAutoScalingForAmazonAppStreamAccess'
-      # RoleARN: >-
-      #   arn:aws:iam::275525559069:role/service-role/ApplicationAutoScalingForAmazonAppStreamAccess
       ScalableDimension: 'appstream:fleet:DesiredCapacity'
       ServiceNamespace: appstream
     DependsOn:
