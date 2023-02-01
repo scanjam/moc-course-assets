@@ -105,7 +105,7 @@ Resources:
     Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
     Properties:
       MinCapacity: 1
-      MaxCapacity: 15
+      MaxCapacity: 1
       ResourceId:  !Join
         - ''
         - - 'fleet/'
