@@ -1,0 +1,15 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": "appstream:Stream",
+            "Resource": "*",
+            "Condition": {
+                "StringEquals": {
+                    "appstream:userId": "${saml:sub}"
+                }
+            }
+        }
+    ]
+}
