@@ -1,0 +1,239 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Masters Of Cloud - Demonstration AppStream 2.0 Stack Deployment Version. Be sure to delete this deployment after testing to reduce unnecessary charges"
+Parameters:
+  PrivateSubnet01ID:
+    Description: >-
+      Please enter the primary subnet where AS2 fleet will be provisioned
+    Type: String
+    Default: subnet-xxxxxxxx
+  PrivateSubnet02ID:
+    Description: >-
+      Please enter the secondary subnet where AS2 fleet will be provisioned
+    Type: String
+    Default: subnet-yyyyyyyy
+  VPCSecurityGroupID:
+    Description: >-
+      Enter the SG you want to assign to the Fleets
+    Type: String
+    Default: sg-zzzzzzzz
+  ActiveDirectoryName:
+    Description: >-
+      Enter the Name of the Active Directory to Join. (Must already exist in the AppStream Console Directory configs)
+    Type: String
+    Default: "mastersof.cloud"
+  ActiveDirectoryOU:
+    Description: >-
+      Enter the DN of the OU where you want your AS Instances placed. (This MUST already exist in the AppStream Console Directory configs)
+    Type: String
+    Default: "OU=AppStream,OU=Computers,OU=mastersof,DC=mastersof,DC=cloud"
+  AppStreamDefaultImageName:
+    Description: >-
+      Enter the Name of the AS2 Image you want to apply to the fleet(s)
+    Type: String
+    Default: "AppStream-WinServer2019-07-12-2022"
+  AppStreamTotalInstancesPerFleet:
+    Description: >-
+      Enter the total number of instances you want available per fleet
+    Type: Number
+    Default: 1
+  CreateAS2Role:
+    Description: Set this to true if you need to create the AppStreamServiceAccess role (i.e You've not used AppStream in this account before) Setting it to false will skip deploying the AppStream 2.0 service role.
+    Default: true
+    Type: String
+
+Conditions:
+  CreateAppStreamRole: !Equals [!Ref CreateAS2Role, "true"]
+
+Resources:
+  iamAmazonAppStreamServiceAccess:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "This role must be explictly named for the AppStream 2.0 Service"
+    Condition: CreateAppStreamRole
+    Properties: 
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - appstream.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/service-role/AmazonAppStreamServiceAccess
+      MaxSessionDuration: 3600
+      Path: /service-role/
+      RoleName: AmazonAppStreamServiceAccess
+  AppStreamFleet1:
+    Type: "AWS::AppStream::Fleet"
+    Properties:
+      Name: "demo-as2-fleet1"
+      Description: "This is a demo fleet that was created using CloudFormation this demo runs a full AS2 desktop"
+      DisplayName: "demo-as2-fleet1"
+      ImageName: !Ref AppStreamDefaultImageName
+      InstanceType: "stream.standard.medium"
+      # DomainJoinInfo:
+      #   DirectoryName: !Ref ActiveDirectoryName
+      #   OrganizationalUnitDistinguishedName: !Ref ActiveDirectoryOU
+      StreamView: "DESKTOP"
+      FleetType: "ALWAYS_ON"
+      ComputeCapacity:
+        DesiredInstances: !Ref AppStreamTotalInstancesPerFleet
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet01ID
+          - !Ref PrivateSubnet02ID
+        SecurityGroupIds:
+          - !Ref VPCSecurityGroupID        
+      MaxUserDurationInSeconds: "3600"
+      DisconnectTimeoutInSeconds: "3600"
+      IdleDisconnectTimeoutInSeconds: "3600"
+      EnableDefaultInternetAccess: False
+      Tags:
+        - Key: Owner
+          Value: Owner
+        - Key: Environment
+          Value: Test
+    CreationPolicy:
+      StartFleet: True
+
+  ScaleTarget1:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: 15
+      ResourceId:  !Join
+        - ''
+        - - 'fleet/'
+          - !Ref AppStreamFleet1
+      RoleARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/service-role/ApplicationAutoScalingForAmazonAppStreamAccess'
+      # RoleARN: >-
+      #   arn:aws:iam::275525559069:role/service-role/ApplicationAutoScalingForAmazonAppStreamAccess
+      ScalableDimension: 'appstream:fleet:DesiredCapacity'
+      ServiceNamespace: appstream
+    DependsOn:
+      - AppStreamFleet1
+
+  ScaleInPolicy1:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName: !Join
+        - ''
+        - - 'ScaleIn-'
+          - !Ref AppStreamFleet1
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ScaleTarget1
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 360
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0.0
+            ScalingAdjustment: -1
+    DependsOn:
+      - ScaleTarget1
+
+  ScaleOutPolicy1:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Properties:
+      PolicyName:  !Join
+        - ''
+        - - 'ScaleOut-'
+          - !Ref AppStreamFleet1
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ScaleTarget1
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 5
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0.0
+            ScalingAdjustment: 5
+    DependsOn:
+      - ScaleTarget1
+
+  ScaleInAlarm1:
+    Type: AWS::CloudWatch::Alarm
+    Properties : 
+      AlarmActions : 
+        - !Ref ScaleInPolicy1
+      AlarmDescription : "Scale in the fleet when using 25% capacity"
+      AlarmName :  !Join
+        - ''
+        - - 'ScaleInAlarm'
+          - !Ref AppStreamFleet1
+      Dimensions : 
+        - Name: Fleet
+          Value: !Ref AppStreamFleet1
+      MetricName : CapacityUtilization
+      Namespace : AWS/AppStream
+      Period : 120
+      EvaluationPeriods : 10      
+      Statistic : Average
+      Threshold : 25
+      ComparisonOperator : LessThanOrEqualToThreshold      
+      Unit : Percent
+    DependsOn:
+      - ScaleInPolicy1  
+
+  ScaleOutAlarm1:
+    Type: AWS::CloudWatch::Alarm
+    Properties : 
+      AlarmActions : 
+        - !Ref ScaleOutPolicy1
+      AlarmDescription : "Scale out the fleet when using 50% capacity"
+      AlarmName :  !Join
+        - ''
+        - - 'ScaleOutAlarm'
+          - !Ref AppStreamFleet1
+      Dimensions : 
+        - Name: Fleet
+          Value: !Ref AppStreamFleet1
+      MetricName : CapacityUtilization
+      Namespace : AWS/AppStream
+      Period : 60
+      EvaluationPeriods : 1   
+      Statistic : Average
+      Threshold : 50
+      ComparisonOperator : GreaterThanOrEqualToThreshold      
+      Unit : Percent
+    DependsOn:
+      - ScaleOutPolicy1
+      
+  AppStreamStack1:
+    Type: "AWS::AppStream::Stack"
+    Properties:
+      Name: "demo-as2-stack1"
+      Description: "This is a working demo of demo-as2-stack"
+      # StorageConnectors:
+        # - ConnectorType: "HOMEFOLDERS"
+        #   ResourceIdentifier: "TestCloudFormationStackBucket"
+      UserSettings:
+        - Action: CLIPBOARD_COPY_FROM_LOCAL_DEVICE
+          Permission: ENABLED
+        - Action: CLIPBOARD_COPY_TO_LOCAL_DEVICE
+          Permission: ENABLED
+        - Action: FILE_DOWNLOAD
+          Permission: ENABLED
+        - Action: FILE_UPLOAD
+          Permission: ENABLED
+        - Action: PRINTING_TO_LOCAL_DEVICE
+          Permission: ENABLED
+      Tags:
+        - Key: Owner
+          Value: Owner
+        - Key: Environment
+          Value: Test
+          
+  AppStreamDemoStackFleetAssociation1:
+    Type: 'AWS::AppStream::StackFleetAssociation'
+    Properties:
+      FleetName: !Ref AppStreamFleet1
+      StackName: !Ref AppStreamStack1
+    DependsOn:
+      - AppStreamFleet1
+      - AppStreamStack1
